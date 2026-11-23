@@ -86,6 +86,13 @@ test("oversized collection contexts fail explicitly instead of silently dropping
 	await assert.rejects(f.workflow.loadPrompt("§topic/"), /Nothing was silently truncated/);
 	assert.equal(f.calls.digests, 0);
 });
+test("digestLevel none rewrites item references to ordinary PDF file references and creates no digest", async t => {
+	const f = await setup(t); f.workflow.digestLevel = "none";
+	const result = await f.workflow.loadPrompt("Explain §topic/paper1 please");
+	assert.equal(result.text, `Explain @${f.attachments[0].data.path} please`);
+	assert.ok(result.context.includes('"fileReference"'));
+	assert.equal(f.calls.digests, 0); assert.equal(f.calls.attachments, 1);
+});
 test("ordinary prompts perform no Zotero access", async t => {
 	const f = await setup(t);
 	const result = await f.workflow.loadPrompt("Hello");

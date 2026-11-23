@@ -27,7 +27,7 @@ The provider stacks on pi's existing editor/completion system. Other providers, 
 
 Collection scans recurse through descendants and read abstracts/existing digests only: no attachment lookup, PDF read/extraction, model-based digest generation, external link fetching, or cache write. Missing/unreadable digests fall back to abstracts with warnings. A missing abstract on a paper-like item is explicit missing data, not evidence that the paper is irrelevant.
 
-A direct paper reference reads the existing digest first. Cache hits require no attachment lookup/PDF access. Missing digests resolve the item's preferred PDF attachment, or the first available PDF, then extract its text with physical page markers. Scanned PDFs require an existing OCR text layer. Every extracted chunk is processed; source chunks are not silently dropped. Large intermediate notes are reduced hierarchically to bound individual requests.
+A direct paper reference reads the existing digest first. Cache hits require no attachment lookup/PDF access. Missing digests resolve the item's preferred PDF attachment, or the first available PDF. Progress states total pages, configured caps, analyzed page range, source characters, chunk count, digest level, and model. `maxPdfPages`/`maxSourceChars` bound the source; capped runs are explicitly marked partial in chat and provenance rather than silently treated as complete. `digestLevel=none` skips this path and rewrites the item reference to an ordinary `@PDF` file reference. Scanned PDFs require an existing OCR text layer. Large intermediate notes are reduced hierarchically to bound individual requests; output-limit failures report the analyzed coverage and save nothing.
 
 Generation uses the current pi model and its provider authentication. Nested calls consume tokens; model identity and usage are recorded in the session. They have no tools and are instructed to treat paper text as untrusted data. Raw PDF text stays outside the main conversation.
 
@@ -39,7 +39,7 @@ Reference context is a hidden custom message. UI hiding does not remove it from 
 
 Paper types requiring an abstract for digestion: `journalArticle`, `conferencePaper`, `preprint`, `thesis`, `report`, `manuscript`.
 
-Other types—software/repositories, webpages, books, datasets, etc.—use a cached digest or descriptive metadata. If insufficient, a direct reference may fetch initial HTTP(S) page information and cache it under `links/<item-key>.json`. Redirect hosts are checked against sandbox policy. Fetches are bounded and partial extracts are labeled; no authenticated browser, JavaScript renderer, SSO/2FA, or paywall bypass is provided. Collection scans never fetch links.
+Other types—software/repositories, webpages, books, datasets, etc.—use a cached digest or descriptive metadata. If insufficient, a direct reference may fetch initial HTTP(S) page information and cache it under `links/<item-key>.json`. pi-sandbox remains the runtime authority for network/filesystem policy; zotero-pi does not issue its own sandbox-approval warnings. Fetches are bounded and partial extracts are labeled; no authenticated browser, JavaScript renderer, SSO/2FA, or paywall bypass is provided. Collection scans never fetch links.
 
 ## Cache and compact format
 
@@ -74,7 +74,7 @@ Runtime helpers use `.ts` so pi reloads the whole dependency graph. Older native
 - `library.ts`, `autocomplete.ts`: pure hierarchy/path handling and editor integration.
 - `workflow.ts`: direct-item versus collection orchestration and bounded non-paper link fetches.
 - `digest.ts`: cache compatibility, generation, provenance, local notes, and re-digestion.
+- `config.ts`: global + trusted-project settings, validation, and defaults.
 - `storage.ts`: stable cache paths, attachment resolution, atomic files, locks, hashing.
-- `access.ts`: saved sandbox policy checks for library-content files/domains.
 
 See [troubleshooting](troubleshooting.md) for operational constraints and [contributing](../CONTRIBUTING.md) for tests.

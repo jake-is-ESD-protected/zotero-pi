@@ -1,4 +1,7 @@
 {
   "cacheDir": "~/.pi/agent/zotero-pi-cache",
-  "maxContextChars": 180000
+  "maxContextChars": 180000,
+  "digestLevel": "normal",
+  "maxPdfPages": 160,
+  "maxSourceChars": 480000
 }

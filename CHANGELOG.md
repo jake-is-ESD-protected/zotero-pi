@@ -4,6 +4,26 @@ Versions follow [Semantic Versioning](https://semver.org/). Published tags use `
 
 ## [Unreleased]
 
+## [0.4.0]
+
+### Added
+
+- Global and trusted-project configuration at `~/.pi/agent/zotero-pi.json` and `.pi/zotero-pi.json`; project scalars override global values.
+- Digest controls: `digestLevel` (`none`, `normal`, `heavy`), `maxPdfPages`, and `maxSourceChars`; `0` means unlimited.
+- Explicit progress showing source pages, analyzed page range, character count, chunk count, level, and model before/while digesting.
+- Partial digests are visibly labeled and recorded as partial coverage in provenance when configured caps truncate a source.
+- `digestLevel: "none"` disables digest creation and rewrites a `§paper` reference to an ordinary `@PDF` file reference.
+
+### Fixed
+
+- `stopped with length` digest failures now include analyzed pages/chars/chunks and remediation instead of only “incomplete response”.
+- zotero-pi no longer duplicates pi-sandbox policy checks or emits sandbox-approval warnings when the sandbox is disabled; pi-sandbox remains the runtime authority when enabled.
+
+### Changed
+
+- Default bounded digestion profile: normal level, max 160 PDF pages and 480,000 source characters unless configured otherwise.
+
+
 ## [0.3.1]
 
 ### Added

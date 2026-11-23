@@ -1,18 +1,14 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { BorderedLoader } from "@earendil-works/pi-coding-agent";
-import { homedir } from "node:os";
-import { join, resolve } from "node:path";
-import { readFile } from "node:fs/promises";
 // Keep runtime helpers as .ts: native .mjs dependencies stay cached across pi /reload.
 import { ZoteroClient, requireZotero, ZoteroUnavailableError } from "./api.ts";
 import { libraryAutocomplete } from "./autocomplete.ts";
-import { SandboxAccess } from "./access.ts";
 import { DigestStore } from "./digest.ts";
+import { configPaths, loadConfig } from "./config.ts";
 import { ReferenceWorkflow } from "./workflow.ts";
 import { buildTree, citekey, referencesIn, resolveReference, suggestions } from "./library.ts";
 import { readOptional } from "./storage.ts";
 
-const CONFIG_PATH = join(homedir(), ".pi", "agent", "zotero-pi.json");
 const HELP = `Zotero references: type § to browse the live library. Select a paper to load its abstract/digest, or a collection ending in / to scan abstracts and existing digests only.
 /zotero status
 /zotero read <citekey-or-path>
@@ -24,15 +20,6 @@ const HELP = `Zotero references: type § to browse the live library. Select a pa
 /zotero help
 License: GNU GPLv3; no warranty. See LICENSE in the installed package or https://github.com/jake-is-ESD-protected/zotero-pi/blob/main/LICENSE`;
 
-function expandHome(path: string) { return path.startsWith("~/") ? join(homedir(), path.slice(2)) : resolve(path); }
-async function config() {
-	let data: any = {};
-	try { data = JSON.parse(await readFile(CONFIG_PATH, "utf8")); }
-	catch (e: any) { if (e.code !== "ENOENT") throw new Error(`zotero-pi: Cannot read ${CONFIG_PATH}: ${e.message}`); }
-	if (data.maxContextChars !== undefined && (!Number.isInteger(data.maxContextChars) || data.maxContextChars < 1000)) throw new Error("zotero-pi: maxContextChars must be an integer >= 1000.");
-	if (data.cacheDir !== undefined && typeof data.cacheDir !== "string") throw new Error("zotero-pi: cacheDir must be a path string.");
-	return { cacheDir: expandHome(data.cacheDir ?? join(homedir(), ".pi", "agent", "zotero-pi-cache")), maxContextChars: data.maxContextChars ?? 180000 };
-}
 function targetRef(value: string) { return `§${value.trim().replace(/^[§#@]/, "")}`; }
 function message(error: unknown) { return error instanceof Error ? error.message : String(error); }
 
@@ -40,11 +27,10 @@ export default function zoteroPi(pi: ExtensionAPI) {
 	let lifetime = new AbortController();
 	let sessionContext: ExtensionContext | undefined;
 	let commandCompletionWarned = false;
-	async function clientFor(ctx: ExtensionContext) {
-		const access = await SandboxAccess.load({ cwd: ctx.cwd,
-			active: pi.getCommands().some(c => c.name === "sandbox"),
-			projectTrusted: ctx.isProjectTrusted(), noSandbox: pi.getFlag("no-sandbox") === true });
-		return new ZoteroClient(undefined, access);
+	function clientFor(_ctx: ExtensionContext) {
+		// pi-sandbox remains authoritative when enabled. zotero-pi does not duplicate
+		// sandbox policy checks: pi-sandbox has no extension API exposing its runtime toggle.
+		return new ZoteroClient();
 	}
 	const notify = (ctx: ExtensionContext) => (text: string, kind: "info" | "warning" = "info") => {
 		ctx.ui.notify(text, kind);
@@ -55,8 +41,8 @@ export default function zoteroPi(pi: ExtensionAPI) {
 		ctx.ui.setStatus("zotero-pi", `${loaded.length} Zotero refs`);
 	}
 	async function workflow(ctx: ExtensionContext) {
-		const client = await clientFor(ctx);
-		const cfg = await config();
+		const client = clientFor(ctx);
+		const cfg = await loadConfig(ctx.cwd, ctx.isProjectTrusted());
 		const model = ctx.model;
 		const generate = async (prompt: string, signal: AbortSignal, maxTokens: number) => {
 			if (!model) throw new Error("zotero-pi: Select a pi model before creating a digest.");
@@ -66,12 +52,13 @@ export default function zoteroPi(pi: ExtensionAPI) {
 				messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
 			}, { signal, maxTokens }).result();
 			pi.appendEntry("zotero-pi-digest-usage", { model: `${model.provider}/${model.id}`, usage: response.usage, stopReason: response.stopReason });
+			if (response.stopReason === "length") throw new Error(`zotero-pi: Digest model hit its output limit and returned an incomplete response; nothing saved. The digest caller reports pages/chars/chunks. Use a higher-output model, digestLevel=heavy only if it helps, or lower maxPdfPages/maxSourceChars.`);
 			if (response.stopReason !== "stop") throw new Error(`zotero-pi: Digest model stopped with ${response.stopReason}: ${response.errorMessage ?? "incomplete response; nothing saved"}`);
 			const text = response.content.filter(c => c.type === "text").map(c => c.text).join("\n");
 			if (!text.trim()) throw new Error("zotero-pi: Digest model returned no text.");
 			return text;
 		};
-		const digests = new DigestStore({ cacheDir: cfg.cacheDir, generate, notify: notify(ctx), model: model ? `${model.provider}/${model.id}` : "unknown", access: client.access });
+		const digests = new DigestStore({ ...cfg, generate, notify: notify(ctx), model: model ? `${model.provider}/${model.id}` : "unknown" });
 		return new ReferenceWorkflow({ client, digests, ...cfg, notify: notify(ctx) });
 	}
 	async function loading<T>(ctx: ExtensionContext, work: (signal: AbortSignal) => Promise<T>): Promise<T> {
@@ -110,7 +97,10 @@ export default function zoteroPi(pi: ExtensionAPI) {
 			// separately so the original prompt (including @ paths/images) stays intact.
 			if (result.context) pi.sendMessage({ customType: "zotero-pi-context", content: result.context, display: false },
 				event.streamingBehavior ? { deliverAs: event.streamingBehavior } : { triggerTurn: false });
-			return { action: "continue" as const };
+			// digestLevel=none may rewrite §item into an ordinary @ PDF file reference.
+			return result.text === event.text
+				? { action: "continue" as const }
+				: { action: "transform" as const, text: result.text, images: event.images };
 		} catch (error) {
 			const text = message(error);
 			ctx.ui.notify(text, error instanceof ZoteroUnavailableError ? "warning" : "error");
@@ -147,7 +137,7 @@ export default function zoteroPi(pi: ExtensionAPI) {
 			try {
 				if (sub === "help") { ctx.ui.notify(HELP, "info"); return; }
 				const client = await clientFor(ctx);
-				await requireZotero(client.fetch, client.access);
+				await requireZotero(client.fetch);
 				if (sub === "read" || sub === "scan") {
 					if (!rest || (sub === "scan" && !rest.endsWith("/"))) throw new Error(`Usage: /zotero ${sub} ${sub === "scan" ? "<collection-path/>" : "<citekey-or-path>"}`);
 					pi.sendUserMessage(sub === "scan" ? `Scan ${targetRef(rest)} and summarize its references using abstracts and existing digests only.` : `Read and summarize ${targetRef(rest)}.`);
@@ -155,7 +145,6 @@ export default function zoteroPi(pi: ExtensionAPI) {
 				}
 				if (sub === "like") {
 					if (!rest) throw new Error("Usage: /zotero like <query>");
-					client.access?.domain("api.crossref.org");
 					const r = await fetch(`https://api.crossref.org/works?rows=10&query=${encodeURIComponent(rest)}`, { signal: AbortSignal.timeout(20000) });
 					if (!r.ok) throw new Error(`Crossref returned HTTP ${r.status}`);
 					const data: any = await r.json();
@@ -165,7 +154,7 @@ export default function zoteroPi(pi: ExtensionAPI) {
 				const service = await workflow(ctx);
 				if (sub === "status") {
 					const tree = await service.tree(lifetime.signal);
-					ctx.ui.notify(`Zotero API: connected\nCollections: ${tree.collections.length}\nCitekeys: ${tree.items.length}\nItems without citekeys: ${tree.missingKeys.length}\nDigest cache: ${service.cacheDir}\nZotero access: read-only\nConfig (optional): ${CONFIG_PATH}`, "info");
+					ctx.ui.notify(`Zotero API: connected\nCollections: ${tree.collections.length}\nCitekeys: ${tree.items.length}\nItems without citekeys: ${tree.missingKeys.length}\nDigest cache: ${service.cacheDir}\nDigest level: ${service.digestLevel}; max PDF pages: ${service.maxPdfPages || "unlimited"}; max source chars: ${service.maxSourceChars || "unlimited"}\nZotero access: read-only\nConfig: global ${configPaths(ctx.cwd, ctx.isProjectTrusted()).global}${ctx.isProjectTrusted() ? `; project ${configPaths(ctx.cwd, true).project}` : " (project config requires trust)"}` , "info");
 					return;
 				}
 				if (sub === "redigest" || sub === "reread") {
@@ -185,7 +174,7 @@ export default function zoteroPi(pi: ExtensionAPI) {
 					const card = location.card;
 					if (sub === "inspect") {
 						let provenance: any = {};
-						try { provenance = JSON.parse(await readOptional(location.provenancePath, client.access) ?? "{}"); } catch { /* Preview remains useful with invalid provenance. */ }
+						try { provenance = JSON.parse(await readOptional(location.provenancePath) ?? "{}"); } catch { /* Preview remains useful with invalid provenance. */ }
 						ctx.ui.notify(`§${citekey(row.item)}\nPDF: ${provenance?.pdfPath ?? "not cached"}\nDigest: ${location.cardPath}\nStatus: ${card === undefined ? "missing" : "present"}\n\n${card?.split("\n").slice(0, 40).join("\n") ?? ""}`, "info");
 					} else {
 						if (!words.length || !words.join(" ").trim()) throw new Error("Usage: /zotero note <citekey-or-path> <text>");

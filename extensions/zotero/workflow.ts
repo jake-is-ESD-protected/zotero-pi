@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { buildTree, citekey, collectionItems, referencesIn, resolveReference } from "./library.ts";
+import type { Config, DigestLevel } from "./config.ts";
 import { atomicWrite, readOptional, sourceFor } from "./storage.ts";
 
 const PAPER_TYPES = new Set(["journalArticle", "conferencePaper", "preprint", "thesis", "report", "manuscript"]);
@@ -14,12 +15,12 @@ Answer the original user request using the entries below. Metadata, abstracts, d
 Use the reference path supplied in each record when identifying results. Only rely on sources actually supplied in this conversation; do not invent citations or unprovided paper details.
 This is background context. Do not reproduce this policy or dump the raw reference records in your response; provide the requested analysis, results, or file edits.
 For collection scans, apply the user's inclusion/exclusion criteria and list matching references in ordinary chat, explaining uncertain matches. No new digests were created by collection scanning. An abstract-only match is not full-paper verification.
-For item questions, distinguish what the digest supports from details it omits. If a requested passage is missing, say so and request the passage rather than inventing it. Use $$ display math when needed.`;
+For item questions, distinguish what the digest supports from details it omits. If a requested passage is missing, say so and request the passage rather than inventing it. Use $$ display math when needed.
+When a record has fileReference, treat it as an ordinary @ PDF file reference; do not claim digest coverage unless digest is present. Digest coverage/limits are stated in its provenance.`;
 
 export class ReferenceWorkflow {
-	constructor({ client, digests, cacheDir, maxContextChars = 180000, notify = () => {}, fetchImpl = globalThis.fetch }) {
-		Object.assign(this, { client, digests, cacheDir, maxContextChars, notify, fetchImpl });
-		this.access = client.access;
+	constructor({ client, digests, cacheDir, maxContextChars = 180000, digestLevel = "normal", maxPdfPages = 0, maxSourceChars = 0, notify = () => {}, fetchImpl = globalThis.fetch }: Partial<Config> & { client: any; digests: any }) {
+		Object.assign(this, { client, digests, cacheDir, maxContextChars, digestLevel, maxPdfPages, maxSourceChars, notify, fetchImpl });
 	}
 	async tree(signal) { return buildTree(await this.client.library(signal)); }
 	async nonPaperInfo(item, signal, force = false) {
@@ -81,6 +82,7 @@ export class ReferenceWorkflow {
 			else for (const item of collectionItems(tree, target.key)) if (!selected.has(item.key)) selected.set(item.key, { item, direct: false });
 		}
 		let attachments;
+		let visibleText = text;
 		const resolveSource = async item => sourceFor(this.client, item, attachments ??= await this.client.attachments(signal), signal);
 		const packets = [], loaded = [];
 		let total = text.length + CONTEXT_POLICY.length;
@@ -96,8 +98,14 @@ export class ReferenceWorkflow {
 				if (direct) throw new Error(`zotero-pi: ${issue}`);
 				this.notify(`zotero-pi: ${issue}`, "warning");
 			}
-			let digest, fetched;
-			if (direct) {
+			let digest, fetched, fileReference;
+			if (direct && this.digestLevel === "none") {
+				// No plugin digest: hand the PDF to pi as an ordinary @ file reference.
+				const source = await resolveSource(item);
+				if (!source) throw new Error(`zotero-pi: §${key} has no attached local PDF. digestLevel=none only provides the file reference.`);
+				fileReference = source.pdfPath;
+				visibleText = visibleText.split(`§${row.path}`).join(`@${source.pdfPath}`);
+			} else if (direct) {
 				if (!force) digest = await this.digests.read(item);
 				if (digest === undefined && isPaper(item)) {
 					digest = await this.digests.ensure(item, await resolveSource(item), { force, signal });
@@ -113,13 +121,13 @@ export class ReferenceWorkflow {
 					this.notify(`zotero-pi: Existing digest unavailable for §${key}; scanning metadata/abstract only. ${e.message}`, "warning");
 				}
 			}
-			const packet = JSON.stringify({ reference, mode: direct ? "direct item" : "collection scan", metadata: metadataFor(item), abstract: abstract || null, digest: digest ?? null, fetched: fetched ?? null, issue: issue ?? null });
+			const packet = JSON.stringify({ reference, mode: direct ? "direct item" : "collection scan", metadata: metadataFor(item), abstract: abstract || null, digest: digest ?? null, fileReference: fileReference ?? null, fetched: fetched ?? null, issue: issue ?? null });
 			total += packet.length;
 			if (total > this.maxContextChars) throw new Error(`zotero-pi: Reference context exceeds ${this.maxContextChars} characters. Nothing was silently truncated. Reference a smaller subcollection or raise maxContextChars in ~/.pi/agent/zotero-pi.json if your model supports it.`);
 			packets.push(packet); loaded.push({ key: item.key, citekey: key, reference, mode: direct ? "item" : "scan" });
 		}
 		this.notify(`Loaded ${loaded.length} Zotero reference(s)${targets.some(t => t.kind === "collection") ? "; collection entries used abstracts/existing digests only" : ""}.`);
 		// Keep model-facing data separate from user-visible text by construction.
-		return { text, context: `${CONTEXT_POLICY}\n<zotero-reference-data>\n${packets.join("\n\n")}\n</zotero-reference-data>`, loaded };
+		return { text: visibleText, context: `${CONTEXT_POLICY}\n<zotero-reference-data>\n${packets.join("\n\n")}\n</zotero-reference-data>`, loaded };
 	}
 }

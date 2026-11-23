@@ -6,7 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const HELPERS = ["index", "access", "api", "autocomplete", "digest", "library", "storage", "workflow"];
+const HELPERS = ["index", "api", "autocomplete", "config", "digest", "library", "storage", "workflow"];
 const ROOT_FILES = ["package.json", "README.md", "LICENSE", "CHANGELOG.md", "CONTRIBUTING.md", "zotero-pi.example.json"];
 export function validateContents(pkg, entries) {
 	if (pkg.license !== "GPL-3.0-only") throw new Error("Package license must match the retained GPLv3 license.");

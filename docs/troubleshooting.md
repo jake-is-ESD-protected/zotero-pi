@@ -24,11 +24,9 @@ Cache writes need permission for the entire configured cache directory: cards, p
 
 Global sandbox configuration normally lives at `~/.pi/agent/sandbox.json` (pi-sandbox respects `PI_CODING_AGENT_DIR`); project rules live at `.pi/sandbox.json` and apply only to trusted projects. Explicit write/domain deny rules take precedence. Restart affected sessions after manual policy edits. Existing grants are not automatically revoked; remove old broad PDF/token write grants if no other tools need them.
 
-## Why session-only grants are not detected
+## Sandbox precedence
 
-pi-sandbox's read/write/bash tool interceptors do not automatically constrain arbitrary Node.js code inside extensions. zotero-pi therefore checks saved global/trusted-project rules itself for content-file access and library network domains. It cannot inspect pi-sandbox's private session-only grants or runtime toggle state. Use saved permissions rather than assuming those session grants are visible. Saved `enabled: false` / `--no-sandbox` are recognized.
-
-No rule is changed automatically. Symlink targets are resolved for file policy checks. Config files are read to establish the control plane. The fixed `pdftotext` invocation reads an approved PDF but is not itself run through pi-sandbox's OS-level bash wrapper. These checks are not a claim of complete process isolation.
+zotero-pi does not duplicate pi-sandbox's policy engine and does not emit its own sandbox-approval warnings when the sandbox is disabled. When pi-sandbox is enabled, it remains the runtime authority; when disabled (`--no-sandbox`, saved `enabled: false`, Alt+S, or `/sandbox-disable`), zotero-pi does not depend on it. pi-sandbox exposes no extension API for its runtime toggle or session-only grants, so zotero-pi never tries to inspect or override them.
 
 ## Digest unavailable during a collection scan
 
@@ -46,9 +44,9 @@ Older versions used native `.mjs` helpers that Node could retain across pi `/rel
 
 Run `pi list` and remove an old local installation before installing the Git source. Local paths and Git sources are different package identities; both can otherwise load. Do not remove unrelated pi packages or edit all settings blindly.
 
-## Context limit exceeded
+## Context, page, or output limits exceeded
 
-`maxContextChars` bounds the reference payload. Use a smaller subcollection or adjust it for the model's available context. The extension does not silently drop papers or truncate a collection to fit. Pi's existing conversation history also consumes context.
+`maxContextChars` bounds the submitted reference payload; use a smaller subcollection or adjust it for the model. `maxPdfPages` and `maxSourceChars` bound PDF analysis (`0` = unlimited); capped digests are marked partial. If a digest model returns `length`, the error now reports analyzed pages, source chars, chunks, and level, and saves nothing. Increase the model output budget, choose `digestLevel: "heavy"` only if that model benefits, or lower the source caps.
 
 ## Old plugin or cache migrations
 

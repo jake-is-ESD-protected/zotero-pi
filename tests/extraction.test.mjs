@@ -24,10 +24,13 @@ test("real Poppler extraction produces LLM-readable text with physical page mark
 	const dir = await mkdtemp(join(tmpdir(), "zotero-extract-")); t.after(() => rm(dir, { recursive: true, force: true }));
 	const path = join(dir, "fixture.pdf");
 	await writeFile(path, textPdf("Scientific evidence from controlled measurements supports the proposed signal processing method and its clearly stated limitations."));
-	const text = await extractPdf(path);
-	assert.ok(text.includes("[PDF page 1]")); assert.ok(text.includes("Scientific evidence"));
-	assert.ok(!text.includes("[PDF page 2]"), "the trailing form feed must not invent a page");
+	const result = await extractPdf(path);
+	assert.ok(result.text.includes("[PDF page 1]")); assert.ok(result.text.includes("Scientific evidence"));
+	assert.equal(result.pageCount, 1); assert.deepEqual(result.analyzedPages, [1, 1]); assert.equal(result.partial, false);
+	assert.ok(!result.text.includes("[PDF page 2]"), "the trailing form feed must not invent a page");
+	const capped = await extractPdf(path, undefined, { maxPages: 1, maxChars: 20 });
+	assert.equal(capped.charCount, 20); assert.equal(capped.partial, true); assert.match(capped.reasons.join(","), /character cap 20/);
 });
-test("PDF errors explain extraction and sandbox requirements", { skip: !available }, async () => {
-	await assert.rejects(extractPdf("/nonexistent-zotero-pi-fixture.pdf"), /Check poppler-utils.*pi-sandbox/);
+test("PDF errors explain extraction requirements", { skip: !available }, async () => {
+	await assert.rejects(extractPdf("/nonexistent-zotero-pi-fixture.pdf"), /pdfinfo failed.*poppler-utils/);
 });

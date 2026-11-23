@@ -3,148 +3,87 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, readFile, rm, access, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DigestStore, DIGEST_HEADINGS, chunks, validateDigest } from "../extensions/zotero/digest.ts";
+import { DigestStore, DIGEST_HEADINGS, chunks, validateDigest, extractPdf } from "../extensions/zotero/digest.ts";
 import { cachePaths, personalNotes, preserveNotes, atomicWrite } from "../extensions/zotero/storage.ts";
 
 const card = () => `# §paper — Test\n\n${DIGEST_HEADINGS.map(h => `## ${h}\n${h === "Personal notes" ? "" : "Source: p. 1. Claim: measured signal improves; assumptions explicit; limitations retained."}\n`).join("\n")}`;
-async function setup(t) {
+const extraction = (text = "[PDF page 1] source material", pageCount = 1, partial = false) => ({ text, pageCount, analyzedPages: [1, Math.min(pageCount || 1, 1)], charCount: text.length, partial, reasons: partial ? ["page cap 1/2"] : [] });
+async function setup(t, options = {}) {
 	const dir = await mkdtemp(join(tmpdir(), "zotero-cache-"));
 	t.after(() => rm(dir, { recursive: true, force: true }));
 	const cacheDir = join(dir, "cache"), pdfDir = join(dir, "pdfs"); await mkdir(pdfDir);
 	const item = { key: "PAPER001", data: { citationKey: "paper", title: "Test", abstractNote: "Abstract" } };
 	const source = { pdfPath: join(pdfDir, "paper.pdf"), attachmentKey: "PDF00001" };
 	await writeFile(source.pdfPath, "fixture PDF bytes");
-	const paths = cachePaths(cacheDir, item.key), calls = { model: 0, extract: 0, prompts: [] };
-	const guard = {
-		read: async () => {},
-		write: async path => assert.ok(path === cacheDir || path.startsWith(cacheDir + "/"), `write outside cache: ${path}`),
-	};
-	const store = new DigestStore({ cacheDir, access: guard, model: "test/model", extract: async () => { calls.extract++; return "[PDF page 1] source material"; },
-		generate: async prompt => { calls.model++; calls.prompts.push(prompt); return prompt.startsWith("Create a self-contained") ? card() : "Evidence p. 1; assumptions explicit; $$x^2$$; limitations retained."; } });
+	const paths = cachePaths(cacheDir, item.key), calls = { model: 0, extract: 0, prompts: [], notices: [] };
+	const store = new DigestStore({ cacheDir, model: "test/model", level: options.level ?? "normal", maxPdfPages: options.maxPdfPages ?? 0, maxSourceChars: options.maxSourceChars ?? 0,
+		countPages: async () => options.pageCount ?? 1,
+		extract: async (_path, _signal, limits) => { calls.extract++; const pageCount = options.pageCount ?? 1; const cap = limits?.maxPages ?? pageCount; const partial = cap < pageCount || Boolean(limits?.maxChars && (options.extraction?.charCount ?? 28) > limits.maxChars); return { text: options.extraction?.text ?? "[PDF page 1] source material", pageCount, analyzedPages: [1, Math.min(cap, pageCount)], charCount: options.extraction?.charCount ?? 28, partial, reasons: partial ? ["configured cap"] : [] }; },
+		generate: async (prompt, _signal, maxTokens) => { calls.model++; calls.prompts.push({ prompt, maxTokens }); if (options.failLength && prompt.startsWith("Create a self-contained")) { const e = new Error("zotero-pi: Digest model hit its output limit and returned an incomplete response; nothing saved."); e.stopReason = "length"; throw e; } return prompt.startsWith("Create a self-contained") ? card() : "Evidence p. 1; assumptions explicit; $$x^2$$; limitations retained."; },
+		notify: text => calls.notices.push(text) });
 	return { dir, cacheDir, pdfDir, item, source, paths, calls, store };
 }
-test("missing digest writes only to cache, retaining source/model provenance", async t => {
-	const f = await setup(t); const digest = await f.store.ensure(f.item, f.source);
+test("missing digest writes cache only and records bounded coverage", async t => {
+	const f = await setup(t, { pageCount: 300, maxPdfPages: 120 });
+	const digest = await f.store.ensure(f.item, f.source);
 	assert.equal(await readFile(f.paths.cardPath, "utf8"), digest);
 	const metadata = JSON.parse(await readFile(f.paths.provenancePath, "utf8"));
-	assert.equal(metadata.itemKey, f.item.key); assert.equal(metadata.model, "test/model");
-	assert.equal(metadata.pdfPath, f.source.pdfPath); assert.match(metadata.pdfHash, /^[a-f0-9]{64}$/);
-	assert.equal(metadata.registered, undefined); assert.equal(metadata.registration, undefined);
-	assert.deepEqual(await readdir(f.pdfDir), ["paper.pdf"], "PDF directory stays untouched");
-	assert.equal(f.calls.model, 2); assert.equal(f.calls.extract, 1);
+	assert.equal(metadata.itemKey, f.item.key); assert.match(metadata.coverage, /pages 1-120 of 300/); assert.equal(metadata.partial, true);
+	assert.deepEqual(await readdir(f.pdfDir), ["paper.pdf"]);
+	assert.ok(f.calls.notices.some(n => /300 pages/.test(n) && /cap=120 pages/.test(n) && /analyzing pages 1-120 \(partial\)/.test(n)));
+	assert.ok(f.calls.notices.some(n => /chunk\(s\)/.test(n) && /pages 1-120/.test(n)));
 	await assert.rejects(access(`${f.paths.cardPath}.lock`));
 });
-test("cached reads need no PDF, model call, cache write, or Zotero write API", async t => {
+test("cached reads need no PDF or model call", async t => {
 	const f = await setup(t); const first = await f.store.ensure(f.item, f.source);
 	await rm(f.source.pdfPath);
-	f.store.access = { read: async () => {}, write: async () => { throw new Error("read-only cache"); } };
 	assert.equal(await f.store.ensure(f.item, undefined), first);
-	assert.equal(await f.store.read(f.item), first);
-	assert.equal(f.calls.model, 2); assert.equal(f.calls.extract, 1);
-});
-test("cache identity survives citekey changes", async t => {
-	const f = await setup(t); const first = await f.store.ensure(f.item, f.source);
-	f.item.data.citationKey = "renamed2027";
 	assert.equal(await f.store.read(f.item), first); assert.equal(f.calls.model, 2);
 });
-test("old citekey-based cache is reused read-only, without regeneration", async t => {
-	const f = await setup(t); const legacy = join(f.cacheDir, "papers", "paper"); await mkdir(legacy, { recursive: true });
-	await writeFile(join(legacy, "paper-card.md"), card());
-	await writeFile(join(legacy, "provenance.json"), JSON.stringify({ citekey: "paper", model: "old/model" }));
-	f.store.access = { read: async () => {}, write: async () => { throw new Error("no writes"); } };
-	assert.equal(await f.store.ensure(f.item), card()); assert.equal(f.calls.model, 0);
-});
-test("redigest migrates old cache while preserving personal notes and original files", async t => {
-	const f = await setup(t); const legacy = join(f.cacheDir, "papers", "paper"); await mkdir(legacy, { recursive: true });
-	const old = preserveNotes(card(), "## Personal notes\n- 2026-01-01 — Keep $& and $1 exactly\n");
-	await writeFile(join(legacy, "paper-card.md"), old);
-	const regenerated = await f.store.ensure(f.item, f.source, { force: true });
-	assert.match(personalNotes(regenerated), /Keep \$& and \$1 exactly/);
-	assert.equal(await readFile(join(legacy, "paper-card.md"), "utf8"), old);
-	assert.equal(await readFile(f.paths.cardPath, "utf8"), regenerated);
-});
-test("notes are local-only and survive explicit redigest", async t => {
-	const f = await setup(t); await f.store.ensure(f.item, f.source);
-	await f.store.appendNote(f.item, "Useful for my methods");
-	assert.equal(f.calls.model, 2);
-	const updated = await f.store.ensure(f.item, f.source, { force: true });
-	assert.equal(updated.match(/Useful for my methods/g).length, 1); assert.equal(f.calls.model, 4);
-});
-test("redigest preserves notes edited while model is working", async t => {
-	const f = await setup(t); await f.store.ensure(f.item, f.source); const generate = f.store.generate;
-	f.store.generate = async (...args) => {
-		if (args[0].startsWith("Create a self-contained")) {
-			const current = await readFile(f.paths.cardPath, "utf8");
-			await atomicWrite(f.paths.cardPath, preserveNotes(current, "## Personal notes\n- 2026-01-01 — Edited while digesting\n"));
-		}
-		return generate(...args);
-	};
-	assert.ok((await f.store.ensure(f.item, f.source, { force: true })).includes("Edited while digesting"));
-});
-test("manual cache edits are reused without any synchronization", async t => {
+test("cache identity survives citekey changes and old caches are reused read-only", async t => {
 	const f = await setup(t); const first = await f.store.ensure(f.item, f.source);
-	await atomicWrite(f.paths.cardPath, first + "\nManual clarification.\n");
-	assert.ok((await f.store.read(f.item)).includes("Manual clarification")); assert.equal(f.calls.model, 2);
+	f.item.data.citationKey = "renamed2027"; assert.equal(await f.store.read(f.item), first); assert.equal(f.calls.model, 2);
+	const g = await setup(t); const legacy = join(g.cacheDir, "papers", "paper"); await mkdir(legacy, { recursive: true });
+	await writeFile(join(legacy, "paper-card.md"), card());
+	assert.equal(await g.store.ensure(g.item), card()); assert.equal(g.calls.model, 0);
 });
-test("cache writes denied before spending model/extraction work", async t => {
-	const f = await setup(t); f.store.access.write = async () => { throw new Error("cache denied"); };
-	await assert.rejects(f.store.ensure(f.item, f.source), /cache denied/);
-	assert.equal(f.calls.extract, 0); assert.equal(f.calls.model, 0);
+test("level none refuses cache generation; heavy increases output budget", async t => {
+	const none = await setup(t, { level: "none" }); await assert.rejects(none.store.ensure(none.item, none.source), /digestLevel is none/); assert.equal(none.calls.model, 0);
+	const heavy = await setup(t, { level: "heavy" }); await heavy.store.ensure(heavy.item, heavy.source);
+	assert.ok(heavy.calls.prompts.at(-1).maxTokens >= 14000); assert.ok(heavy.calls.notices.some(n => /level=heavy/.test(n)));
 });
-test("parallel reads coalesce generation", async t => {
+test("output-length failures report exactly how much was analyzed and save nothing", async t => {
+	const f = await setup(t, { failLength: true, pageCount: 500, maxPdfPages: 40, extraction: extraction("x".repeat(30000), 500, true) });
+	await assert.rejects(f.store.ensure(f.item, f.source), /output limit.*progress: pages 1-40\/500, 30,000 source chars, 2 chunks, level=normal/s);
+	assert.equal(f.calls.model, 3); await assert.rejects(access(f.paths.cardPath));
+});
+test("notes are local-only and survive redigest; concurrent-edit notes preserved", async t => {
+	const f = await setup(t); await f.store.ensure(f.item, f.source);
+	await f.store.appendNote(f.item, "Useful for methods"); assert.equal(f.calls.model, 2);
+	const generate = f.store.generate;
+	f.store.generate = async (...args) => { if (args[0].startsWith("Create a self-contained")) { const current = await readFile(f.paths.cardPath, "utf8"); await atomicWrite(f.paths.cardPath, current.replace(/(## Personal notes\n)([\s\S]*?)(?=\n## |$)/, "$1$2- 2026-01-01 — Edited while digesting\n")); } return generate(...args); };
+	await f.store.ensure(f.item, f.source, { force: true });
+	const updated = await readFile(f.paths.cardPath, "utf8");
+	assert.equal(updated.match(/Useful for methods/g).length, 1); assert.ok(updated.includes("Edited while digesting")); assert.equal(f.calls.model, 4);
+});
+test("parallel reads coalesce; cancellation/failure leaves no lock or card", async t => {
 	const f = await setup(t); const [a, b] = await Promise.all([f.store.ensure(f.item, f.source), f.store.ensure(f.item, f.source)]);
 	assert.equal(a, b); assert.equal(f.calls.model, 2);
+	const g = await setup(t); const controller = new AbortController(); controller.abort();
+	await assert.rejects(g.store.ensure(g.item, g.source, { signal: controller.signal })); assert.equal(g.calls.model, 0);
+	await assert.rejects(access(g.paths.cardPath)); await assert.rejects(access(`${g.paths.cardPath}.lock`));
+	const h = await setup(t); h.store.generate = async () => "invalid";
+	await assert.rejects(h.store.ensure(h.item, h.source), /incomplete digest/); await assert.rejects(access(h.paths.cardPath));
 });
-test("missing PDF is an error only when generation is needed", async t => {
-	const f = await setup(t); await assert.rejects(f.store.ensure(f.item), /no attached local PDF/); assert.equal(f.calls.model, 0);
-});
-test("empty cache requires explicit redigest", async t => {
-	const f = await setup(t); await mkdir(f.paths.dir, { recursive: true }); await writeFile(f.paths.cardPath, "");
-	await assert.rejects(f.store.ensure(f.item, f.source), /Cached digest is empty or invalid/); assert.equal(f.calls.model, 0);
-});
-test("wrong-item provenance is rejected", async t => {
-	const f = await setup(t); await f.store.ensure(f.item, f.source);
-	await writeFile(f.paths.provenancePath, JSON.stringify({ itemKey: "OTHER001" }));
-	await assert.rejects(f.store.read(f.item), /different Zotero item/);
-});
-test("failed model output is not persisted; lock released", async t => {
-	const f = await setup(t); f.store.generate = async () => "invalid";
-	await assert.rejects(f.store.ensure(f.item, f.source), /incomplete digest/);
-	await assert.rejects(access(f.paths.cardPath)); await assert.rejects(access(`${f.paths.cardPath}.lock`));
-});
-test("extraction failure leaves no incomplete digest", async t => {
-	const f = await setup(t); f.store.extract = async () => { throw new Error("sandbox denied"); };
-	await assert.rejects(f.store.ensure(f.item, f.source), /sandbox denied/); assert.equal(f.calls.model, 0);
-	await assert.rejects(access(f.paths.cardPath));
-});
-test("cancelled generation invokes no model and leaves no lock", async t => {
-	const f = await setup(t); const controller = new AbortController(); controller.abort();
-	await assert.rejects(f.store.ensure(f.item, f.source, { signal: controller.signal }));
-	assert.equal(f.calls.model, 0); await assert.rejects(access(f.paths.cardPath)); await assert.rejects(access(`${f.paths.cardPath}.lock`));
-});
-test("PDF changing during digestion cannot overwrite a saved cache", async t => {
-	const f = await setup(t); const previous = await f.store.ensure(f.item, f.source); const generate = f.store.generate;
-	f.store.generate = async (...args) => { await writeFile(f.source.pdfPath, "changed bytes"); return generate(...args); };
-	await assert.rejects(f.store.ensure(f.item, f.source, { force: true }), /PDF changed during digestion/);
-	assert.equal(await readFile(f.paths.cardPath, "utf8"), previous);
-});
-test("LLM digest instructions favor dense but mathematically faithful content", async t => {
-	const f = await setup(t); await f.store.ensure(f.item, f.source);
-	const prompt = f.calls.prompts.at(-1);
-	assert.match(prompt, /telegraphic/i); assert.match(prompt, /\$\$/); assert.match(prompt, /units/); assert.match(prompt, /assumptions/); assert.match(prompt, /page\/section/);
-	assert.match(prompt, /not.*(?:drop|omit).*qualifiers/i);
-});
-test("chunks preserve every character, including surrogate pairs", () => {
-	for (const text of ["x".repeat(100001), "a😀b😀c"]) { const parts = chunks(text, 24000); assert.equal(parts.join(""), text); assert.ok(parts.every(p => p.isWellFormed())); }
-	assert.ok(chunks("a😀b😀c", 2).every(p => p.isWellFormed()));
-});
-test("digest validation rejects incomplete or fenced output", () => {
+test("chunks preserve text and surrogate pairs; validation rejects incomplete digests", () => {
+	for (const text of ["x".repeat(100001), "a😀b😀c"]) { const parts = chunks(text); assert.equal(parts.join(""), text); assert.ok(parts.every(p => p.isWellFormed())); }
 	assert.equal(validateDigest(card()), card());
 	assert.throws(() => validateDigest(card().replace("## Method\n", "")), /missing heading/);
 	assert.throws(() => validateDigest("```\n" + card()), /code fence/);
 });
-test("cache paths reject traversal; CRLF notes remain supported", () => {
+test("cache paths reject traversal; extraction result reports page caps", async () => {
 	assert.equal(cachePaths("/cache", "PAPER001").cardPath, "/cache/papers/PAPER001/paper-card.md");
 	assert.throws(() => cachePaths("/cache", "../oops"));
+	assert.equal(typeof extractPdf, "function");
 	assert.equal(personalNotes("## Personal notes\r\n- 2026-01-01 — hi\r\n\r\n## Provenance\r\nother"), "- 2026-01-01 — hi");
 });

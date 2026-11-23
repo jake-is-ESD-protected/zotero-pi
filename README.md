@@ -59,16 +59,26 @@ A collection scan recursively loads abstracts and existing digests only. An expl
 
 Your prompt and `@` file paths remain intact. Background metadata is hidden from chat rendering, not from model usage or local session storage. Progress/warnings can precede the displayed prompt because preparation runs in the input hook.
 
-## Cache and digest behavior
+## Cache, limits, and digest level
 
-Default cache: **`~/.pi/agent/zotero-pi-cache`**. Optional config at **`~/.pi/agent/zotero-pi.json`**:
+Defaults live in the global config at **`~/.pi/agent/zotero-pi.json`**; a trusted project may override scalars in **`.pi/zotero-pi.json`**:
 
 ```json
 {
   "cacheDir": "~/.pi/agent/zotero-pi-cache",
-  "maxContextChars": 180000
+  "maxContextChars": 180000,
+  "digestLevel": "normal",
+  "maxPdfPages": 160,
+  "maxSourceChars": 480000
 }
 ```
+
+- `digestLevel`: `normal` (default), `heavy`, or `none`.
+- `maxPdfPages` / `maxSourceChars`: bound how much of a PDF is analyzed; `0` means unlimited. When a cap truncates a source, progress says so and provenance records `partial` coverage.
+- `digestLevel: "none"` creates no digest and rewrites `§paper` to an ordinary `@/absolute/path.pdf` file reference.
+- Progress reports total pages, analyzed page range, characters, chunk count, level, and model; output-limit failures include those stats and save nothing.
+
+Default cache: **`~/.pi/agent/zotero-pi-cache`**.
 
 Each paper is stored under `papers/<Zotero-item-key>/paper-card.md` with `provenance.json`. The stable item key survives citekey renames. PDF directories are read-only; writes stay inside the cache.
 
@@ -102,7 +112,7 @@ Grant **literal directory paths, without `*`**, covering all nested contents. Ty
 /sandbox-allow write /home/you/.pi/agent/zotero-pi-cache
 ```
 
-Choose **project** or **all projects**. Cache write access also grants reads. PDF directories need **no write access**. This extension cannot inspect pi-sandbox's private session-only grants; saved rules are required. Explicit denies still win. [Sandbox and troubleshooting](docs/troubleshooting.md).
+Choose **project** or **all projects**. Cache write access also grants reads. PDF directories need **no write access**. zotero-pi does **not** duplicate pi-sandbox policy checks or emit its own sandbox-approval warnings when the sandbox is disabled; pi-sandbox remains the runtime authority when enabled. Explicit denies still win. [Sandbox and troubleshooting](docs/troubleshooting.md).
 
 ## Development and releases
 

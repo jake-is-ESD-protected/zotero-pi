@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { validateContents } from "../scripts/package.mjs";
 
 const pkg = { license: "GPL-3.0-only", pi: { extensions: ["./extensions/zotero/index.ts"] } };
-const files = ["package.json", "README.md", "LICENSE", "CHANGELOG.md", "CONTRIBUTING.md", "zotero-pi.example.json", ...["index", "access", "api", "autocomplete", "digest", "library", "storage", "workflow"].map(name => `extensions/zotero/${name}.ts`), "docs/releases.md"].map(path => ({ path }));
+const files = ["package.json", "README.md", "LICENSE", "CHANGELOG.md", "CONTRIBUTING.md", "zotero-pi.example.json", ...["index", "api", "autocomplete", "config", "digest", "library", "storage", "workflow"].map(name => `extensions/zotero/${name}.ts`), "docs/releases.md"].map(path => ({ path }));
 test("distribution includes the entire runtime helper graph and license", () => {
 	assert.equal(validateContents(pkg, files).length, files.length);
 });
