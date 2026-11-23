@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Node ${{ matrix.node }} / pi 1.0.4 / Linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22.20.0", "24"]
+    env:
+      PI_VERSION: "1.0.4"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Set up Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Install development environment
+        run: |
+          npm ci --ignore-scripts --legacy-peer-deps
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends poppler-utils
+          npm install --prefix "$RUNNER_TEMP/pi-host" --no-save --no-package-lock "@earendil-works/pi-coding-agent@$PI_VERSION"
+          echo "PI_PACKAGE_ROOT=$RUNNER_TEMP/pi-host/node_modules/@earendil-works/pi-coding-agent" >> "$GITHUB_ENV"
+      - name: Unit and safety tests
+        run: npm test
+      - name: Installed pi integration and reload regression
+        run: npm run test:pi
+      - name: Validate release metadata and distribution contents
+        run: |
+          npm run release:check
+          npm run check:package
+      - name: Test extracted distribution in isolation
+        run: npm run test:package
