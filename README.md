@@ -1,5 +1,8 @@
 # zotero-pi
 
+> [!WARNING]
+> This project is **vibe coded**: its implementation was generated with AI assistance. The author specified the requirements and does **not** claim to have personally written the code.
+
 [![CI](https://github.com/jake-is-ESD-protected/zotero-pi/actions/workflows/ci.yml/badge.svg)](https://github.com/jake-is-ESD-protected/zotero-pi/actions/workflows/ci.yml)
 
 Browse Zotero from [pi](https://pi.dev), scan collections cheaply, and reuse compact PDF digests as model context.
