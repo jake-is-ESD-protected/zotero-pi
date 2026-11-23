@@ -1,0 +1,47 @@
+# Dependencies and generated output
+node_modules/
+coverage/
+.nyc_output/
+dist/
+build/
+.npm-cache/
+*.tgz
+*.tsbuildinfo
+*.log
+*.tmp
+
+# Local pi state, permissions, sessions, and agent scratch data
+.pi/
+.context-mode/
+.ctx-mode*/
+AGENTS.local.md
+
+# Personal research data and generated reference caches
+cache/
+zotero-pi-cache/
+papers/
+*.pdf
+*.bib
+*.bibtex
+paper-card.md
+paper-card.md.lock
+provenance.json
+zotero-pi-????????.md
+zotero-pi-????????.md.json
+
+# Credentials and machine-local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+zotero-pi.json
+zotero-pi-bridge-token
+
+# Editor / OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
