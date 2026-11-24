@@ -3,5 +3,6 @@
   "maxContextChars": 180000,
   "digestLevel": "normal",
   "maxPdfPages": 160,
-  "maxSourceChars": 480000
+  "maxSourceChars": 480000,
+  "digestTimeoutMs": 600000
 }

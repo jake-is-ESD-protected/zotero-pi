@@ -4,6 +4,20 @@ Versions follow [Semantic Versioning](https://semver.org/). Published tags use `
 
 ## [Unreleased]
 
+## [0.4.1]
+
+### Fixed
+
+- Added `digestTimeoutMs` (default 600000) and pass it as both provider `timeoutMs` and an abort deadline; timeout errors now name the configured limit.
+- Digest chunk/output budgets increased (normal: 16k-char chunks with 12k output budget; heavy: 24k chunks with 20k), and per-call output is clamped to the selected model's `maxTokens`. A 5-page paper no longer hits `length` merely because a 24k-char chunk was capped at 6k output tokens.
+- Nested digest calls no longer send `reasoning_effort=none` to reasoning models that reject it (e.g. some Mistral models). If the session level is `off` and the model marks `off` unsupported, the digest call uses the lowest supported level.
+- Personal notes are now inserted deterministically as a local-only section, so models cannot make an otherwise valid digest fail by omitting the intentionally empty heading.
+
+### Changed
+
+- Digestion now uses rolling batch-merge: source chunks are grouped into batches, each batch is appended/merged into the running digest, and no single model call receives the whole extracted document. Progress reports merged batches and chunk ranges.
+
+
 ## [0.4.0]
 
 ### Added

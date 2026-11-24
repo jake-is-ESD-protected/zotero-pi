@@ -19,7 +19,8 @@ async function setup(t, options = {}) {
 	const store = new DigestStore({ cacheDir, model: "test/model", level: options.level ?? "normal", maxPdfPages: options.maxPdfPages ?? 0, maxSourceChars: options.maxSourceChars ?? 0,
 		countPages: async () => options.pageCount ?? 1,
 		extract: async (_path, _signal, limits) => { calls.extract++; const pageCount = options.pageCount ?? 1; const cap = limits?.maxPages ?? pageCount; const partial = cap < pageCount || Boolean(limits?.maxChars && (options.extraction?.charCount ?? 28) > limits.maxChars); return { text: options.extraction?.text ?? "[PDF page 1] source material", pageCount, analyzedPages: [1, Math.min(cap, pageCount)], charCount: options.extraction?.charCount ?? 28, partial, reasons: partial ? ["configured cap"] : [] }; },
-		generate: async (prompt, _signal, maxTokens) => { calls.model++; calls.prompts.push({ prompt, maxTokens }); if (options.failLength && prompt.startsWith("Create a self-contained")) { const e = new Error("zotero-pi: Digest model hit its output limit and returned an incomplete response; nothing saved."); e.stopReason = "length"; throw e; } return prompt.startsWith("Create a self-contained") ? card() : "Evidence p. 1; assumptions explicit; $$x^2$$; limitations retained."; },
+		generate: async (prompt, _signal, maxTokens) => { calls.model++; calls.prompts.push({ prompt, maxTokens }); const isMerge = prompt.includes("NEW SOURCE NOTES:");
+		if (options.failLength && isMerge) { const e = new Error("zotero-pi: Digest model hit its output limit and returned an incomplete response; nothing saved."); e.stopReason = "length"; throw e; } return isMerge ? card() : "Evidence p. 1; assumptions explicit; $$x^2$$; limitations retained."; },
 		notify: text => calls.notices.push(text) });
 	return { dir, cacheDir, pdfDir, item, source, paths, calls, store };
 }
@@ -61,7 +62,7 @@ test("notes are local-only and survive redigest; concurrent-edit notes preserved
 	const f = await setup(t); await f.store.ensure(f.item, f.source);
 	await f.store.appendNote(f.item, "Useful for methods"); assert.equal(f.calls.model, 2);
 	const generate = f.store.generate;
-	f.store.generate = async (...args) => { if (args[0].startsWith("Create a self-contained")) { const current = await readFile(f.paths.cardPath, "utf8"); await atomicWrite(f.paths.cardPath, current.replace(/(## Personal notes\n)([\s\S]*?)(?=\n## |$)/, "$1$2- 2026-01-01 — Edited while digesting\n")); } return generate(...args); };
+	f.store.generate = async (...args) => { if (args[0].includes("NEW SOURCE NOTES:")) { const current = await readFile(f.paths.cardPath, "utf8"); await atomicWrite(f.paths.cardPath, current.replace(/(## Personal notes\n)([\s\S]*?)(?=\n## |$)/, "$1$2- 2026-01-01 — Edited while digesting\n")); } return generate(...args); };
 	await f.store.ensure(f.item, f.source, { force: true });
 	const updated = await readFile(f.paths.cardPath, "utf8");
 	assert.equal(updated.match(/Useful for methods/g).length, 1); assert.ok(updated.includes("Edited while digesting")); assert.equal(f.calls.model, 4);
@@ -75,6 +76,13 @@ test("parallel reads coalesce; cancellation/failure leaves no lock or card", asy
 	const h = await setup(t); h.store.generate = async () => "invalid";
 	await assert.rejects(h.store.ensure(h.item, h.source), /incomplete digest/); await assert.rejects(access(h.paths.cardPath));
 });
+test("model may omit the local-only personal notes section", async t => {
+	const f = await setup(t);
+	f.store.generate = async prompt => prompt.includes("NEW SOURCE NOTES:") ? card().replace("## Personal notes\n", "") : "Evidence p. 1; assumptions explicit; $$x^2$$; limitations retained.";
+	const digest = await f.store.ensure(f.item, f.source);
+	assert.match(digest, /## Personal notes\n/);
+});
+
 test("chunks preserve text and surrogate pairs; validation rejects incomplete digests", () => {
 	for (const text of ["x".repeat(100001), "a😀b😀c"]) { const parts = chunks(text); assert.equal(parts.join(""), text); assert.ok(parts.every(p => p.isWellFormed())); }
 	assert.equal(validateDigest(card()), card());

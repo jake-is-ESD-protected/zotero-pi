@@ -83,13 +83,13 @@ try {
 		assert.equal(rendered, 0, "the installed terminal renderer must create no metadata component (also on transcript replay)");
 	}
 	extension({ on: (n, h) => { handlers[n] = h; }, registerCommand: (n, c) => { commands[n] = c; }, appendEntry() {}, sendMessage: m => sent.push(m), sendUserMessage: m => sent.push(m), getCommands: () => [], getFlag: () => undefined });
-	const model = { provider: "fixture", id: "model" };
+	const model = { provider: "fixture", id: "model", reasoning: true, thinkingLevelMap: { off: null, low: "low", medium: "medium", high: "high" } };
 	const ctx = {
 		cwd: temporary, mode: "print", hasUI: false, model, isProjectTrusted: () => true,
 		ui: { setStatus() {}, notify: (...args) => notices.push(args) },
 		modelRegistry: { streamSimple: (selected, context, options) => {
-			assert.equal(selected, model); assert.ok(options.signal instanceof AbortSignal); modelCalls++;
-			const final = context.messages[0].content.startsWith("Create a self-contained");
+			assert.equal(selected, model); assert.ok(options.signal instanceof AbortSignal); assert.equal(options.reasoning, "low", "models that reject off must get a supported non-off reasoning level"); modelCalls++;
+			const final = context.messages[0].content.includes("NEW SOURCE NOTES:");
 			const content = final ? `# §paper — Fixture\n\n${["Abstract", "Research question", "Method", "Symbols and equations", "Key findings and evidence", "Limitations", "Personal notes"].map(h => `## ${h}\n${h === "Personal notes" ? "" : "Scientific source evidence with physical page references and careful limitations."}\n`).join("\n")}` : "Detailed source-derived scientific notes with page references.";
 			return { result: async () => ({ stopReason: "stop", content: [{ type: "text", text: content }], usage: {} }) };
 		} },

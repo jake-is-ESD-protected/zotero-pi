@@ -69,12 +69,14 @@ Defaults live in the global config at **`~/.pi/agent/zotero-pi.json`**; a truste
   "maxContextChars": 180000,
   "digestLevel": "normal",
   "maxPdfPages": 160,
-  "maxSourceChars": 480000
+  "maxSourceChars": 480000,
+  "digestTimeoutMs": 600000
 }
 ```
 
 - `digestLevel`: `normal` (default), `heavy`, or `none`.
 - `maxPdfPages` / `maxSourceChars`: bound how much of a PDF is analyzed; `0` means unlimited. When a cap truncates a source, progress says so and provenance records `partial` coverage.
+- `digestTimeoutMs` bounds each nested digest model request (default 10 minutes; `0` uses provider/pi defaults).
 - `digestLevel: "none"` creates no digest and rewrites `§paper` to an ordinary `@/absolute/path.pdf` file reference.
 - Progress reports total pages, analyzed page range, characters, chunk count, level, and model; output-limit failures include those stats and save nothing.
 

@@ -12,6 +12,8 @@ export interface Config {
 	maxPdfPages: number;
 	/** Maximum extracted source characters analyzed per digest. 0 means unlimited. */
 	maxSourceChars: number;
+	/** Per nested digest model request timeout in milliseconds. 0 uses provider/pi defaults. */
+	digestTimeoutMs: number;
 }
 
 export const DEFAULT_CONFIG: Config = {
@@ -20,6 +22,7 @@ export const DEFAULT_CONFIG: Config = {
 	digestLevel: "normal",
 	maxPdfPages: 160,
 	maxSourceChars: 480000,
+	digestTimeoutMs: 600000,
 };
 
 function expandHome(path: string) { return path.startsWith("~/") ? join(homedir(), path.slice(2)) : resolve(path); }
@@ -37,7 +40,8 @@ function validate(data: any, source: string): Partial<Config> {
 	for (const key of ["maxPdfPages", "maxSourceChars"] as const) {
 		if (data[key] !== undefined && (!Number.isInteger(data[key]) || data[key] < 0)) throw new Error(`zotero-pi: ${source}: ${key} must be an integer >= 0 (0 = unlimited).`);
 	}
-	const allowed = ["cacheDir", "maxContextChars", "digestLevel", "maxPdfPages", "maxSourceChars"];
+	if (data.digestTimeoutMs !== undefined && (!Number.isInteger(data.digestTimeoutMs) || data.digestTimeoutMs < 0)) throw new Error(`zotero-pi: ${source}: digestTimeoutMs must be an integer >= 0.`);
+	const allowed = ["cacheDir", "maxContextChars", "digestLevel", "maxPdfPages", "maxSourceChars", "digestTimeoutMs"];
 	const unknown = Object.keys(data).filter(key => !allowed.includes(key) && !["bibliography", "collections", "longDocumentPageThreshold"].includes(key));
 	if (unknown.length) throw new Error(`zotero-pi: ${source}: unknown settings: ${unknown.join(", ")}. Supported: ${allowed.join(", ")}.`);
 	return data;
